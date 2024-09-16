@@ -1,20 +1,10 @@
-import bs4
+import re
+import os
 import requests
 import sqlite3
-import re
 from logging import currentframe
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
-
-
-
-
-def save_url_to_db111(cursor, url):
-    try:
-        # Вставляем URL в таблицу, если его еще нет
-        cursor.execute('INSERT OR IGNORE INTO urllist (url) VALUES (?)', (url,))
-    except sqlite3.Error as e:
-        print(f"Ошибка при записи URL {url}: {e}")
 
 
 class Crawler:
@@ -22,6 +12,7 @@ class Crawler:
     # 0. Конструктор Инициализация паука с параметрами БД
     def __init__(self, db_file_name):
         print("Конструктор")
+        self.db_file_name = db_file_name
         self.conn = sqlite3.connect(db_file_name)
         self.cursor = self.conn.cursor()
         self.init_db()
@@ -30,8 +21,8 @@ class Crawler:
     # 0. Деструктор
     def __del__(self):
         print("Деструктор")
-        self.close_db()
-        pass
+        if self.conn:
+            self.close_db()
 
     def get_entry_id(self, table, field, value, createnew=True):
         self.cursor.execute(f"SELECT id FROM {table} WHERE {field} = ?", (value,))
@@ -48,8 +39,6 @@ class Crawler:
 
     # 1. Индексирование одной страницы
     def add_index(self, soup, url):
-        if self.is_indexed(url):
-            return
         print(f"Индексация {url}")
 
         # Вставляем URL в таблицу urllist
@@ -155,6 +144,7 @@ class Crawler:
     # до заданной глубины, индексируя все встречающиеся по пути страницы
     def crawl(self, url_list, depth):
         """Основной метод для обхода страниц и индексации"""
+        self.save_urls_to_db(url_list)
         current_depth = 0
         pages_to_crawl = url_list
 
@@ -178,15 +168,57 @@ class Crawler:
 
     # 7. Инициализация таблиц в БД
     def init_db(self):
-        # Создание таблицы urllist, если она не существует
+
+        # Создание таблицы для проиндексированных URL
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS urllist (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 url TEXT UNIQUE
             )
         ''')
-        self.conn.commit()
-        print("бд создана")
+
+        # Создание таблицы для списка всех проиндексированных слов
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS wordlist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                word TEXT UNIQUE,
+                is_filtered BOOLEAN
+            )
+        ''')
+
+        # Создание таблицы для мест вхождения слов в документы
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS wordlocation (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                urlid INTEGER,
+                wordid INTEGER,
+                location INTEGER,
+                FOREIGN KEY (urlid) REFERENCES urllist(id),
+                FOREIGN KEY (wordid) REFERENCES wordlist(id)
+            )
+        ''')
+
+        # Создание таблицы для хранения связей между URL
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS linkBetweenURL (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_urlid INTEGER,
+                to_urlid INTEGER,
+                FOREIGN KEY (from_urlid) REFERENCES urllist(id),
+                FOREIGN KEY (to_urlid) REFERENCES urllist(id)
+            )
+        ''')
+
+        # Создание таблицы для хранения слов, связанных с ссылками
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS linkwords (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wordid INTEGER,
+                linkid INTEGER,
+                FOREIGN KEY (wordid) REFERENCES wordlist(id),
+                FOREIGN KEY (linkid) REFERENCES linkBetweenURL(id)
+            )
+        ''')
 
     # 8. Вспомогательная функция для получения идентификатора и
     # добавления записи, если такой еще нет
