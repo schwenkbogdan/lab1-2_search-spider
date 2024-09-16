@@ -1,6 +1,9 @@
-import Crawler_module
+import Crawler
 
-if __name__ == '__main__':
-    start_pages = ['https://history.eco']  # Стартовые страницы
-    crawler = Crawler_module.Crawler('test.db')
-    crawler.crawl(start_pages, depth=0)  # Глубина обхода — 2
+# Пример использования
+if __name__ == "__main__":
+    # Создаем экземпляр паука и запускаем обход с начального списка URL
+    crawler = Crawler.Crawler('crawler.db', 'db.sql')
+    start_urls = ['https://www.gazeta.ru/']  # Замените на реальные начальные URL
+    crawler.crawl(start_urls, maxDepth=2)
+    del crawler  # Явно вызываем деструктор для закрытия соединения с БД
