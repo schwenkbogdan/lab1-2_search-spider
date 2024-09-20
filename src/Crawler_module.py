@@ -24,147 +24,29 @@ class Crawler:
         if self.conn:
             self.close_db()
 
-    def get_entry_id(self, table, field, value, createnew=True):
-        self.cursor.execute(f"SELECT id FROM {table} WHERE {field} = ?", (value,))
-        res = self.cursor.fetchone()
-        if res is None:
-            if createnew:
-                self.cursor.execute(f"INSERT INTO {table} ({field}) VALUES (?)", (value,))
-                self.conn.commit()
-                return self.cursor.lastrowid
-            else:
-                return None
-        else:
-            return res[0]
-
-    # 1. Индексирование одной страницы
-    def add_index(self, soup, url):
-        print(f"Индексация {url}")
-
-        # Вставляем URL в таблицу urllist
-        urlid = self.get_entry_id('urllist', 'url', url)
-
-        # Разбираем текст на слова
-        text = self.get_text_only(soup)
-        words = self.separate_words(text)
-
-        # Добавляем местоположение каждого слова в таблицу wordlocation
-        for i, word in enumerate(words):
-            wordid = self.get_entry_id('wordlist', 'word', word)
-            self.cursor.execute("INSERT INTO wordlocation (urlid, wordid, location) VALUES (?, ?, ?)",
-                                (urlid, wordid, i))
-        self.conn.commit()
-
-    def add_to_index(self, url, soup):
-        """Индексирует страницу, если она еще не проиндексирована"""
-        if self.is_indexed(url):
-            return
-        print(f"Индексация {url}")
-
-        # Извлечение всех слов из текста страницы
-        text = self.get_text_only(soup)
-        words = self.separate_words(text)
-
-        # Получаем идентификатор страницы для вставки в таблицу wordlocation
-        urlid = self.get_entry_id('urllist', 'url', url)
-
-        # Индексируем каждое слово
-        for i, word in enumerate(words):
-            if len(word) > 2:  # Простейший фильтр слов
-                wordid = self.get_entry_id('wordlist', 'word', word)
-                self.cursor.execute("INSERT INTO wordlocation (urlid, wordid, location) VALUES (?, ?, ?)",
-                                    (urlid, wordid, i))
-        self.conn.commit()
-
-    # 2. Получение текста страницы
-    def get_text_only(self, soup):
-        # Извлекаем текст из тегов
-        return soup.get_text()
-
-    # 3. Разбиение текста на слова
-    def separate_words(self, text):
-        """Разделение текста на слова с простейшей фильтрацией"""
-        import re
-        splitter = re.compile(r'\W+')  # Делим по не-словам
-        return [s.lower() for s in splitter.split(text) if s != '']
-
-    # 4. Проиндексирован ли URL (проверка наличия URL в БД)
-    def is_indexed(self, url):
-        """Проверка, проиндексирована ли страница"""
-        self.cursor.execute("SELECT id FROM urllist WHERE url=?", (url,))
-        result = self.cursor.fetchone()
-        if result is not None:
-            # Проверка, проиндексированы ли слова
-            self.cursor.execute("SELECT * FROM wordlocation WHERE urlid=?", (result[0],))
-            if self.cursor.fetchone() is not None:
-                return True
-        return False
-
-    def add_link(self, url_from, url_to, link_text):
-        fromid = self.get_entry_id('urllist', 'url', url_from)
-        toid = self.get_entry_id('urllist', 'url', url_to)
-
-        # Добавляем запись о ссылке в таблицу link и получаем ID вставленной ссылки
-        self.cursor.execute("INSERT INTO link (fromid, toid) VALUES (?, ?)", (fromid, toid))
-        linkid = self.cursor.lastrowid
-
-        # Разбиваем текст ссылки на слова и добавляем их в таблицу linkwords
-        words = self.separate_words(link_text)
-        for word in words:
-            wordid = self.get_entry_id('wordlist', 'word', word)
-            self.cursor.execute("INSERT INTO linkwords (wordid, linkid) VALUES (?, ?)", (wordid, linkid))
-        self.conn.commit()
-
-    # 5. Добавление ссылки с одной страницы на другую
-    def add_link_ref(self, url_from, url_to, link_text):
-        # Получаем идентификаторы URL (если их нет в таблице urllist, они будут добавлены)
-        fromid = self.get_entry_id('urllist', 'url', url_from)
-        toid = self.get_entry_id('urllist', 'url', url_to)
-
-        # Проверяем, существует ли уже такая ссылка
-        self.cursor.execute("SELECT id FROM link WHERE fromid=? AND toid=?", (fromid, toid))
-        res = self.cursor.fetchone()
-
-        if res is None:
-            # Если записи нет, добавляем её в таблицу link
-            self.cursor.execute("INSERT INTO link (fromid, toid) VALUES (?, ?)", (fromid, toid))
-            linkid = self.cursor.lastrowid
-
-            # Добавляем слова из текста ссылки в таблицу linkwords
-            words = self.separate_words(link_text)
-            for word in words:
-                wordid = self.get_entry_id('wordlist', 'word', word)
-                self.cursor.execute("INSERT INTO linkwords (wordid, linkid) VALUES (?, ?)", (wordid, linkid))
-            self.conn.commit()
-        else:
-            print(f"Link from {url_from} to {url_to} уже существует.")
-
     # 6. Непосредственно сам метод сбора данных.
     # Начиная с заданного списка страниц, выполняет поиск в ширину
     # до заданной глубины, индексируя все встречающиеся по пути страницы
-    def crawl(self, url_list, depth):
-        """Основной метод для обхода страниц и индексации"""
-        self.save_urls_to_db(url_list)
-        current_depth = 0
-        pages_to_crawl = url_list
+    def crawl(self, start_url, depth=2):
+        queue = [(start_url, 0)]  # Очередь ссылок для обхода
 
-        while current_depth <= depth and pages_to_crawl:
-            new_pages = []
-            for page in pages_to_crawl:
-                if not self.is_indexed(page):
-                    try:
-                        print("Получить и проанализировать страницу")
-                        # Получить и проанализировать страницу
-                        links = self.parse(page)
-                        self.save_urls_to_db(links)
+        while queue:
+            url, current_depth = queue.pop(0)  # Извлекаем первую ссылку из очереди
+            if current_depth > depth:
+                continue
 
+            print(f"Обход страницы: {url}")
+            links = self.parse(url)  # Вызываем метод parse
 
-                    except Exception as e:
-                        print(f"Ошибка при обработке {page}: {e}")
+            if links is None:  # Добавляем проверку, если parse вернул None
+                continue
 
-            # Обновляем список страниц для следующей глубины
-            pages_to_crawl = list(set(new_pages))  # Убираем дубликаты
-            current_depth += 1
+            # Сохраняем найденные ссылки в БД
+            self.save_urls_to_db(links)
+
+            # Добавляем новые ссылки в очередь для дальнейшего обхода
+            for link in links:
+                queue.append((link, current_depth + 1))
 
     # 7. Инициализация таблиц в БД
     def init_db(self):
@@ -238,31 +120,28 @@ class Crawler:
             print(f"Ошибка при записи URL: {e}")
 
     def parse(self, url):
-        """Получает список адресов для поиска в них уникальных страниц на том же адресе и подсчёта их количества, отдаёт лист найденных страниц"""
         try:
-            # Получить HTML код страницы
+            # Получаем HTML-контент страницы
             html_doc = requests.get(url)
-            print(f"6. crawl - Попытка открыть страницу {url}")
+            print(f"Попытка открыть страницу {url}")
 
-            # Разбор HTML-кода
+            # Разбираем HTML-код
             soup = BeautifulSoup(html_doc.text, 'html.parser')
 
-            # Удалить ненужные элементы (script, style)
+            # Удаляем ненужные теги (script, style)
             for tag in soup(['script', 'style']):
                 tag.decompose()
 
-            # Найти все ссылки на странице
+            # Находим все ссылки на странице
             links = []
             for a_tag in soup.find_all('a', href=True):
-                link = urljoin(url, a_tag['href'])  # Создать абсолютную ссылку
-                # Проверяем, чтобы ссылка вела на тот же домен
+                link = urljoin(url, a_tag['href'])  # Преобразуем относительные ссылки в абсолютные
+                # Проверяем, что ссылка ведёт на тот же домен
                 if urlparse(link).netloc == urlparse(url).netloc:
                     links.append(link)
 
-            # Уникализируем ссылки
-            unique_links = list(set(links))
+            unique_links = list(set(links))  # Уникализируем ссылки
 
-            # Вывести список ссылок и их количество
             print("\nНайденные ссылки на страницы этого сайта:")
             for link in unique_links:
                 print(link)
@@ -271,9 +150,9 @@ class Crawler:
 
             return unique_links
 
-        except Exception as e:
-            print(f"Ошибка: {e}")
-            print(f"Не могу открыть {url}")
+        except requests.exceptions.RequestException as e:
+            print(f"Ошибка при попытке открыть {url}: {e}")
+            return None
 
     def close_db(self):
         if self.conn:
