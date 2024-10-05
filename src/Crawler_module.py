@@ -65,6 +65,13 @@ class Crawler:
                         for external_link in external_links:
                             self.crawl_external(external_link, 1, max_depth)
 
+                            # Save the link relationship from the current page to the external link
+                            self.save_link_between_urls(page, external_link)
+
+                        # Save the relationship for internal links as well
+                        for internal_link in internal_links:
+                            self.save_link_between_urls(page, internal_link)
+
                     except Exception as e:
                         print(f"Error processing {page}: {e}")
 
@@ -87,6 +94,7 @@ class Crawler:
 
                 # Recursively crawl further external links
                 for external_link in external_links:
+                    self.save_link_between_urls(url, external_link)  # Save the link relationship
                     self.crawl_external(external_link, current_depth + 1, max_depth)
 
             except Exception as e:
@@ -124,6 +132,22 @@ class Crawler:
             # Remove duplicates from both lists
             unique_internal_links = list(set(internal_links))
             unique_external_links = list(set(external_links))
+
+            # Write word list
+
+            # Текст, слова, и их местоположение
+            text = self.get_text_only(soup)
+
+            words = self.separate_words(text)
+            self.save_text_to_db(words)
+
+            # Assuming `wordid` is retrieved from the saved words in the DB
+            for word in words:
+                wordid = self.get_word_id(word)  # You need to implement this method to get the word ID
+                for link in unique_internal_links + unique_external_links:
+                    linkid = self.get_link_id(link)  # You need to implement this method to get the link ID
+                    if wordid is not None and linkid is not None:
+                        self.save_link_words(wordid, linkid)  # Save the word-link relationship
 
             # Print found links
             print(
@@ -206,6 +230,61 @@ class Crawler:
     def add_link_ref(self, url_from, url_to, link_text):
         return ""
 
+    def get_word_id(self, word):
+        """Retrieve the word ID from the database based on the word."""
+        self.cursor.execute('SELECT id FROM wordlist WHERE word = ?', (word,))
+        result = self.cursor.fetchone()
+        return result[0] if result else None
+
+    def get_link_id(self, link):
+        """Retrieve the link ID from the database based on the link."""
+        self.cursor.execute('SELECT id FROM urllist WHERE url = ?', (link,))
+        result = self.cursor.fetchone()
+        return result[0] if result else None
+
+
+
+    def save_link_words(self, wordid, linkid):
+        """Saves the relationship between words and links to the linkwords table."""
+        try:
+            # Prepare the SQL insert statement
+            self.cursor.execute(
+                'INSERT INTO linkwords (wordid, linkid) VALUES (?, ?)',
+                (wordid, linkid)
+            )
+            self.conn.commit()
+            logging.info(f"Saved wordid {wordid} for linkid {linkid} in linkwords table.")
+        except sqlite3.Error as e:
+            logging.error(f"Error saving link-word relationship: {e}")
+            print(f"Ошибка при записи связи между словом и ссылкой: {e}")
+
+
+    def save_link_between_urls(self, from_url, to_url):
+        """Saves the relationship between two URLs to the linkbetweenurl table."""
+        try:
+            # Get the ID of the from_url
+            self.cursor.execute('SELECT id FROM urlList WHERE url = ?', (from_url,))
+            from_url_id = self.cursor.fetchone()
+
+            # Get the ID of the to_url
+            self.cursor.execute('SELECT id FROM urlList WHERE url = ?', (to_url,))
+            to_url_id = self.cursor.fetchone()
+
+            if from_url_id and to_url_id:  # Check if both URLs exist in the database
+                # Prepare the SQL insert statement using IDs
+                self.cursor.execute(
+                    'INSERT INTO linkBetweenURL (from_urlid, to_urlid) VALUES (?, ?)',
+                    (from_url_id[0], to_url_id[0])  # Save IDs instead of URLs
+                )
+                self.conn.commit()
+                logging.info(
+                    f"Saved link from {from_url} (ID: {from_url_id[0]}) to {to_url} (ID: {to_url_id[0]}) in linkBetweenURL table.")
+            else:
+                logging.warning(f"One of the URLs {from_url} or {to_url} does not exist in the database.")
+        except sqlite3.Error as e:
+            logging.error(f"Error saving link between URLs: {e}")
+            print(f"Ошибка при записи связи между URL: {e}")
+
     def is_ignored_file(self, link):
         """Проверяет, является ли ссылка ссылкой на файл, который нужно игнорировать.
         Добавить игнор недопустимых ссылок"""
@@ -237,6 +316,22 @@ class Crawler:
         except sqlite3.Error as e:
             logging.error(f"Error saving URLs: {e}")
             print(f"Ошибка при записи URL: {e}")
+
+    def save_wordlocation_to_db(self, urlid, wordid, location):
+        """Метод для записи позиции слова в базу данных"""
+        try:
+            # Создание значения для вставки
+            values = (urlid, wordid, location)
+
+            # Выполнение вставки с игнорированием дубликатов
+            self.cursor.execute('INSERT OR IGNORE INTO wordlocation (urlid, wordid, location) VALUES (?, ?, ?)', values)
+            self.conn.commit()
+            logging.info(f"Saved word location for URL ID {urlid}, Word ID {wordid}, Location {location}")
+            print("Записано")
+        except sqlite3.Error as e:
+            logging.error(f"Error saving word location: {e}")
+            print(f"Ошибка при записи позиции слова: {e}")
+
 
     def load_config(self, config_file):
         """Метод для загрузки конфигурации из файла .ini."""
