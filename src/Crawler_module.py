@@ -279,8 +279,8 @@ class Crawler:
                 self.conn.commit()
                 logging.info(
                     f"Saved link from {from_url} (ID: {from_url_id[0]}) to {to_url} (ID: {to_url_id[0]}) in linkBetweenURL table.")
-            else:
-                logging.warning(f"One of the URLs {from_url} or {to_url} does not exist in the database.")
+            # else:
+            #     logging.warning(f"One of the URLs {from_url} or {to_url} does not exist in the database.")
         except sqlite3.Error as e:
             logging.error(f"Error saving link between URLs: {e}")
             print(f"Ошибка при записи связи между URL: {e}")
