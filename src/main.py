@@ -1,7 +1,7 @@
 import Crawler_module
 
 if __name__ == '__main__':
-    start_pages = ['https://history.eco'
-                   ]  # Стартовые страницы, 'http://90.189.211.2/''https://habr.com'
+    start_pages = ['http://www.chipichipichapachapa.ru/'
+                   ]  # Стартовые страницы, 'https://habr.com''https://history.eco'
     crawler = Crawler_module.Crawler('test3.db', 'config.ini')
-    crawler.crawl(start_pages, 2)  # Глубина обхода
+    crawler.crawl(start_pages, 1)  # Глубина обхода

@@ -158,17 +158,6 @@ class Crawler:
             print(f"Error: {e}")
             return [], []
 
-    # 7. Инициализация таблиц в БД
-
-    def init_db_from_file(self):
-        """Инициализирует базу данных с помощью SQL-файла."""
-        with open(self.schema_path, 'r') as sql_file:
-            sql_script = sql_file.read()
-
-        # Выполнение скрипта из SQL файла
-        self.cursor.executescript(sql_script)
-        self.conn.commit()
-
     # 8. Вспомогательная функция для получения идентификатора и
     # добавления записи, если такой еще нет
     def get_entry_id(self, table_name, field_name, value):
@@ -193,30 +182,18 @@ class Crawler:
     # 3. Разбиение текста на слова
     def separate_words(self, text):
         """Разделение текста на слова с простейшей фильтрацией: удалить союзы, знаки препинания и ненужные слова."""
-        import re
+
         # Регулярное выражение для разделения по не-словам (любые символы, кроме букв и цифр)
         splitter = re.compile(r'\W+')
-
-        # Список слов, которые необходимо удалить (союзы и предлоги)
-        not_allowed_word_list = [
-            'я', 'и', 'но', 'или', 'что', 'как', 'а', 'с', 'на', 'в', 'под', 'за', 'к', 'у', 'по', 'до',
-            'от', 'при', 'то', 'о'
-                               'and', 'but', 'or', 'that', 'as', 'while', 'for', 'with', 'on', 'in', 'under', 'after',
-            'to',
-            'by', 'before'
-        ]
+        cyrillic_pattern = re.compile(r'^[а-яА-ЯёЁ]+$')
 
         # Разделяем текст на слова и фильтруем ненужные
-        return [s.lower() for s in splitter.split(text) if s.lower() not in not_allowed_word_list and s != '']
-
-    def load_stopwords(self, file_path):
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                stopwords = [line.strip().lower() for line in f if line.strip()]
-            return stopwords
-        except FileNotFoundError:
-            print(f"Файл {file_path} не найден.")
-            return []
+        return [
+            s.lower() for s in splitter.split(text)
+            if (cyrillic_pattern.match(s) and
+                s.lower() not in self.stopwords and
+                len(s) >= 3)  # Отбрасываем слова меньше 3 букв
+        ]
 
     # 4. Проиндексирован ли URL (проверка наличия URL в БД)
     def is_indexed(self, url):
@@ -242,8 +219,6 @@ class Crawler:
         result = self.cursor.fetchone()
         return result[0] if result else None
 
-
-
     def save_link_words(self, wordid, linkid):
         """Saves the relationship between words and links to the linkwords table."""
         try:
@@ -257,7 +232,6 @@ class Crawler:
         except sqlite3.Error as e:
             logging.error(f"Error saving link-word relationship: {e}")
             print(f"Ошибка при записи связи между словом и ссылкой: {e}")
-
 
     def save_link_between_urls(self, from_url, to_url):
         """Saves the relationship between two URLs to the linkbetweenurl table."""
@@ -292,6 +266,16 @@ class Crawler:
                               '.pdf', '.zip', '.tar', '.gz', '.mp3', '.mp4',
                               '.avi', '.mov', '.mkv', '.exe')
         return link.lower().endswith(ignored_extensions)
+
+    # 7. Инициализация таблиц в БД
+    def init_db_from_file(self):
+        """Инициализирует базу данных с помощью SQL-файла."""
+        with open(self.schema_path, 'r') as sql_file:
+            sql_script = sql_file.read()
+
+        # Выполнение скрипта из SQL файла
+        self.cursor.executescript(sql_script)
+        self.conn.commit()
 
     def save_text_to_db(self, text):
         try:
@@ -332,12 +316,26 @@ class Crawler:
             logging.error(f"Error saving word location: {e}")
             print(f"Ошибка при записи позиции слова: {e}")
 
-
     def load_config(self, config_file):
         """Метод для загрузки конфигурации из файла .ini."""
         config = configparser.ConfigParser()
         config.read(config_file)
         return config
+
+    def load_stopwords(self, file_path):
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                stopwords = [line.strip().lower() for line in f if line.strip()]
+            return stopwords
+        except FileNotFoundError:
+            print(f"Файл {file_path} не найден.")
+            return []
+
+    def laod_ignored_files(self):
+        try:
+            ignored = ''
+        except FileNotFoundError:
+            return []
 
     def close_db(self):
         if self.conn:
