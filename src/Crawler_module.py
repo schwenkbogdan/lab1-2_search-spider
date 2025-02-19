@@ -95,6 +95,55 @@ class Crawler:
             except Exception as e:
                 print(f"Error processing external link {url}: {e}")
 
+    # def parse(self, url):
+    #     try:
+    #         response = requests.get(url)
+    #         print(f"Fetching page: {url}")
+    #         soup = BeautifulSoup(response.text, 'html.parser')
+    #
+    #         for tag in soup(['script', 'style']):
+    #             tag.decompose()
+    #
+    #         internal_links = []
+    #         external_links = []
+    #         base_domain = urlparse(url).netloc
+    #
+    #         for a_tag in soup.find_all('a', href=True):
+    #             link = urljoin(url, a_tag['href'])
+    #
+    #             if urlparse(link).netloc == base_domain:
+    #                 if not self.is_ignored_file(link):  # Исправлено использование метода
+    #                     internal_links.append(link)
+    #             else:
+    #                 external_links.append(link)
+    #
+    #         unique_internal_links = list(set(internal_links))
+    #         unique_external_links = list(set(external_links))
+    #
+    #         text = self.get_text_only(soup)
+    #         words = self.separate_words(text)
+    #         self.save_text_to_db(words)
+    #
+    #         for a_tag in soup.find_all('a', href=True):
+    #             link = urljoin(url, a_tag['href'])
+    #             link_text = a_tag.get_text()
+    #             linkid = self.get_link_id(link)
+    #
+    #             if linkid is not None:
+    #                 anchor_words = self.separate_words(link_text)
+    #                 for word in anchor_words:
+    #                     wordid = self.get_word_id(word)
+    #                     if wordid is not None:
+    #                         self.save_link_words_to_db(wordid, linkid)
+    #
+    #         print(
+    #             f"Found {len(unique_internal_links)} internal links and {len(unique_external_links)} external links on {url}")
+    #         return unique_internal_links, unique_external_links
+    #
+    #     except Exception as e:
+    #         print(f"Error: {e}")
+    #         return [], []
+
     def parse(self, url):
         try:
             response = requests.get(url)
@@ -112,7 +161,7 @@ class Crawler:
                 link = urljoin(url, a_tag['href'])
 
                 if urlparse(link).netloc == base_domain:
-                    if not self.is_ignored_file(link):  # Исправлено использование метода
+                    if not self.is_ignored_file(link):
                         internal_links.append(link)
                 else:
                     external_links.append(link)
@@ -120,9 +169,8 @@ class Crawler:
             unique_internal_links = list(set(internal_links))
             unique_external_links = list(set(external_links))
 
-            text = self.get_text_only(soup)
-            words = self.separate_words(text)
-            self.save_text_to_db(words)
+            # Добавляем содержимое страницы в индекс
+            self.addToIndex(soup, url)
 
             for a_tag in soup.find_all('a', href=True):
                 link = urljoin(url, a_tag['href'])
@@ -159,14 +207,27 @@ class Crawler:
                 len(s) >= 3)  # Отбрасываем слова меньше 3 букв
         ]
 
-    def get_text_only(self, soup):
-        # Извлекаем текст из тегов
-        print("Извлекаем текст из тегов")
-        return soup.get_text()
-
     def is_indexed(self, url):
         """Проверка, проиндексирована ли страница"""
-        return False
+        self.cursor.execute('SELECT id FROM urllist WHERE url = ?', (url,))
+        url_id = self.cursor.fetchone()
+        if url_id is None:
+            return False
+        self.cursor.execute('SELECT * FROM wordlocation WHERE urlid = ?', (url_id[0],))
+        return self.cursor.fetchone() is not None
+
+    def addToIndex(self, soup, url):
+        """Добавление содержимого страницы в индекс"""
+        if self.is_indexed(url):
+            return
+
+        text = self.get_text_only(soup)
+        words = self.separate_words(text)
+
+        url_id = self.get_entry_id('urllist', 'url', url, True)
+        for i, word in enumerate(words):
+            word_id = self.get_entry_id('wordlist', 'word', word, True)
+            self.save_wordlocation_to_db(url_id, word_id, i)
 
     def is_ignored_file(self, link):
         """
@@ -196,11 +257,29 @@ class Crawler:
         self.cursor.executescript(sql_script)
         self.conn.commit()
 
+    def get_text_only(self, soup):
+        # Извлекаем текст из тегов
+        print("Извлекаем текст из тегов")
+        return soup.get_text()
+
     def get_link_id(self, link):
         """Retrieve the link ID from the database based on the link."""
         self.cursor.execute('SELECT id FROM urllist WHERE url = ?', (link,))
         result = self.cursor.fetchone()
         return result[0] if result else None
+
+    def get_entry_id(self, table, field, value, create_new=False):
+        """Получение идентификатора записи в таблице"""
+        self.cursor.execute(f'SELECT id FROM {table} WHERE {field} = ?', (value,))
+        result = self.cursor.fetchone()
+        if result is not None:
+            return result[0]
+        elif create_new:
+            self.cursor.execute(f'INSERT INTO {table} ({field}) VALUES (?)', (value,))
+            self.conn.commit()
+            return self.cursor.lastrowid
+        else:
+            return None
 
     def get_word_id(self, word):
         """Retrieve the word ID from the database based on the word."""
@@ -268,14 +347,20 @@ class Crawler:
             logging.error(f"Error saving URLs: {e}")
             print(f"Ошибка при записи URL: {e}")
 
-    def save_text_to_db(self, text):
-        try:
-            values = [(word,) for word in set(text)]
-            self.cursor.executemany('INSERT OR IGNORE INTO wordlist (word) VALUES (?)', values)
-            self.conn.commit()
-        except sqlite3.Error as e:
-            logging.error(f"Error saving words: {e}")
-            print(f"Ошибка при записи слов: {e}")
+    # def save_text_to_db(self, text):
+    #     try:
+    #         values = [(word,) for word in set(text)]
+    #         self.cursor.executemany('INSERT OR IGNORE INTO wordlist (word) VALUES (?)', values)
+    #         self.conn.commit()
+    #     except sqlite3.Error as e:
+    #         logging.error(f"Error saving words: {e}")
+    #         print(f"Ошибка при записи слов: {e}")
+
+    def save_text_to_db(self, words, url_id):
+        """Сохранение слов и их позиций в базе данных"""
+        for i, word in enumerate(words):
+            word_id = self.get_entry_id('wordlist', 'word', word, True)
+            self.save_wordlocation_to_db(url_id, word_id, i)
 
     def close_db(self):
         """Закрывает соединение с базой данных, если оно открыто."""
